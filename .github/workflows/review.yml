@@ -3,7 +3,6 @@ name: Dagger Review
 on:
   pull_request:
     types: [opened, synchronize, labeled]
-  # Also trigger on workflow_dispatch for manual runs
   workflow_dispatch:
     inputs:
       pr_number:
@@ -18,13 +17,12 @@ jobs:
       contains(github.event.label.name, 'review') || 
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize'))
-    
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
       issues: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -57,15 +55,36 @@ jobs:
             uv pip install --system -r requirements.txt
           else
             echo "No requirements.txt or pyproject.toml found"
-            uv pip install --system dagger-io PyGithub
+            uv pip install --system dagger-io PyGithub openai
           fi
+      
+      - name: Verify OPENAI_API_KEY is set
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "❌ OPENAI_API_KEY is empty!"
+            exit 1
+          else
+            echo "✅ OPENAI_API_KEY is set"
+          fi
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      
+      - name: Test OpenAI connectivity
+        run: |
+          curl --fail https://api.openai.com/v1/models \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Accept: application/json" \
+            && echo "✅ Connected to OpenAI" \
+            || (echo "❌ Could not reach api.openai.com" && exit 1)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       
       - name: Run Dagger review
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # Optional
+          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:  ${{ github.repository }}
+          GITHUB_PR_NUMBER:   ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
         run: python3 review.py
       
       - name: Upload review artifacts
