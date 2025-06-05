@@ -15,6 +15,7 @@ from typing import Dict
 import dagger
 from github import Github, GithubException
 from openai import OpenAI, AsyncOpenAI, APIError  # Use the new client classes
+import requests
 
 
 class PRReviewer:
@@ -231,6 +232,82 @@ dependencies = [
         except APIError as e:
             return f"❌ Could not generate AI feedback: {str(e)}"
 
+    def fetch_pr_diff(self) -> str:
+        """
+        Download the raw unified diff for this PR via GitHub’s API.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/vnd.github.v3.diff"
+        }
+        resp = requests.get(self.pr.diff_url, headers=headers)
+        resp.raise_for_status()
+        return resp.text
+
+    def generate_ai_feedback_on_diff(self, results: Dict[str, str]) -> str:
+        """
+        1) Fetch the PR diff.
+        2) Build a prompt including the diff and optional static-analysis results.
+        3) Call OpenAI to get high-level feedback on these changes.
+        """
+        # Fetch the raw diff
+        try:
+            diff_text = self.fetch_pr_diff()
+        except Exception as e:
+            return f"❌ Could not fetch PR diff: {e}"
+
+        # Truncate diff if it's too large
+        if len(diff_text) > 50000:
+            diff_blob = diff_text[:50000] + "\n... (diff truncated)\n"
+        else:
+            diff_blob = diff_text
+
+        # (Optional) Include static-analysis results for context
+        analysis_blob = ""
+        for tool, output in results.items():
+            truncated = output if len(output) < 2000 else output[:2000] + "\n... (truncated)\n"
+            analysis_blob += f"### {tool.upper()} Results:\n{truncated}\n\n"
+
+        # Build system and user messages
+        system_msg = {
+            "role": "system",
+            "content": (
+                "You are an expert Python code reviewer. "
+                "Below is a unified diff for a pull request. "
+                "Review the changes and provide concise, actionable feedback:\n"
+                "- Style and formatting comments\n"
+                "- Potential bugs or edge cases\n"
+                "- Suggestions for improvement\n"
+            )
+        }
+
+        user_content = f"""```diff
+{diff_blob}
+```
+
+{analysis_blob}
+
+Please comment mainly on the **diff above**, referencing files or line numbers as needed."""
+        user_msg = {"role": "user", "content": user_content}
+
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[system_msg, user_msg],
+                temperature=0.3,
+                max_tokens=800
+            )
+            return response.choices[0].message.content.strip()
+
+        except APIConnectionError as conn_exc:
+            return f"❌ OpenAI connection error: {conn_exc}"
+        except RateLimitError as rl_exc:
+            return f"❌ OpenAI rate limit exceeded: {rl_exc}"
+        except APIError as api_exc:
+            return f"❌ OpenAI API error: {api_exc}"
+        except Exception as e:
+            return f"❌ Unexpected error generating AI feedback: {e}"
+
     async def run_review(self) -> None:
         """Run the complete review process: static analysis + AI feedback + GitHub comments."""
         print(f"Starting review for PR #{self.pr_number} in {self.repo}")
@@ -247,10 +324,10 @@ dependencies = [
                 # 3) Format the static-analysis comment
                 main_comment = self.format_review_comment(results)
 
-                # 4) Generate AI feedback
-                ai_feedback = self.generate_ai_feedback(results)
+                # 4) Generate AI feedback on the diff
+                ai_feedback = self.generate_ai_feedback_on_diff(results)
                 main_comment += "\n\n---\n\n"
-                main_comment += "## 🤖 AI-Generated Feedback\n\n"
+                main_comment += "## 🤖 AI-Generated Feedback on Diff\n\n"
                 main_comment += ai_feedback
 
                 # 5) Post the combined comment to GitHub
