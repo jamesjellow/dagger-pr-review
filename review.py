@@ -49,7 +49,7 @@ dependencies = [
         container = (
             client.container()
             .from_("python:3.12-slim")
-            .with_exec(["apt-get", "update", "&&", "apt-get", "install", "-y", "git"], use_entrypoint=True)
+            .with_exec(["sh", "-c", "apt-get update && apt-get install -y git"])
             .with_exec(["pip", "install", "uv"])
             .with_directory("/src", src)
             .with_workdir("/src")
@@ -77,30 +77,40 @@ dependencies = [
         if not changed_files:
             return {"info": "No Python files to analyze"}
         
-        # Run different analysis tools
+        # Run different analysis tools with better error handling
         analysis_commands = {
-            "flake8": ["flake8"] + changed_files,
+            "flake8": ["flake8", "--max-line-length=88"] + changed_files,
             "black": ["black", "--check", "--diff"] + changed_files,
-            "mypy": ["mypy"] + changed_files,
-            "bandit": ["bandit", "-r"] + changed_files,
+            "mypy": ["mypy", "--ignore-missing-imports"] + changed_files,
+            "bandit": ["bandit", "-f", "txt"] + changed_files,
             "isort": ["isort", "--check-only", "--diff"] + changed_files
         }
         
         for tool, cmd in analysis_commands.items():
             try:
-                result = await container.with_exec(cmd, skip_entrypoint=True).stdout()
-                if result.strip():
-                    results[tool] = result
-                else:
-                    results[tool] = f"✅ {tool}: No issues found"
-            except Exception as e:
-                # Some tools return non-zero exit codes for issues found
+                # Execute command - most linting tools return non-zero on issues
+                exec_container = container.with_exec(cmd)
+                
+                # Try to get stdout first
                 try:
-                    # Try to get stderr which might contain the actual output
-                    result = await container.with_exec(cmd, skip_entrypoint=True).stderr()
-                    results[tool] = result if result.strip() else f"❌ {tool}: Command failed"
+                    result = await exec_container.stdout()
+                    if result.strip():
+                        results[tool] = result
+                    else:
+                        results[tool] = f"✅ {tool}: No issues found"
                 except:
-                    results[tool] = f"❌ {tool}: Analysis failed - {str(e)}"
+                    # If stdout fails, the command likely had a non-zero exit
+                    # This is normal for linters when they find issues
+                    try:
+                        # Create a new container and run with error handling
+                        error_container = container.with_exec(["sh", "-c", f"{' '.join(cmd)}; echo 'Exit code: '$?"])
+                        error_result = await error_container.stdout()
+                        results[tool] = f"⚠️ {tool}: {error_result}"
+                    except:
+                        results[tool] = f"⚠️ {tool}: Found issues but couldn't capture output"
+                        
+            except Exception as e:
+                results[tool] = f"❌ {tool}: Analysis failed - {str(e)}"
         
         return results
     
