@@ -7,7 +7,7 @@ comment on GitHub pull requests. Set the following environment variables and run
 it with Python:
 
 ```bash
-export GITHUB_REPOSITORY=your/repo
+export GITHUB_REPOSITORY=jamesjellow/dagger-pr-review
 export GITHUB_PR_NUMBER=1
 export GITHUB_TOKEN=ghp_yourtoken
 python3 review.py
