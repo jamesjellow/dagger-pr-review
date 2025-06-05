@@ -1,5 +1,14 @@
-# Python dependencies for Dagger review workflow
-# Dagger Python SDK
-Dagger-io==0.18.9
-PyGithub==2.6.1
-flake8==7.0.0
+# Core dependencies
+dagger-io>=0.9.0
+PyGithub>=1.59.0
+
+# Optional: For enhanced AI reviews
+openai>=1.0.0
+
+# Development tools (installed in container)
+flake8>=6.0.0
+black>=23.0.0
+mypy>=1.0.0
+pylint>=2.17.0
+bandit>=1.7.0
+isort>=5.12.0
