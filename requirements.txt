@@ -1,0 +1,5 @@
+# Python dependencies for Dagger review workflow
+# Dagger Python SDK
+Dagger-io==0.18.9
+PyGithub==2.6.1
+flake8==7.0.0
