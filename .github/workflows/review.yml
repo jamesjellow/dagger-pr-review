@@ -2,24 +2,78 @@ name: Dagger Review
 
 on:
   pull_request:
-    types: [labeled]
+    types: [opened, synchronize, labeled]
+  # Also trigger on workflow_dispatch for manual runs
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
 
 jobs:
   review:
-    if: github.event.label.name == 'review'
+    # Run if labeled with 'review' OR if manually triggered OR if it's a new/updated PR
+    if: |
+      contains(github.event.label.name, 'review') || 
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize'))
+    
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.12'
+      
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      
+      - name: Cache uv dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+      
       - name: Install dependencies
-        run: pip install uv
+        run: |
+          if [ -f "pyproject.toml" ]; then
+            uv sync
+          elif [ -f "requirements.txt" ]; then
+            uv pip install --system -r requirements.txt
+          else
+            echo "No requirements.txt or pyproject.toml found"
+            uv pip install --system dagger-io PyGithub
+          fi
+      
       - name: Run Dagger review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          uv pip install -r requirements.txt
-          python3 review.py
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # Optional
+        run: python3 review.py
+      
+      - name: Upload review artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: review-results
+          path: |
+            review-*.json
+            analysis-*.txt
+          retention-days: 7
