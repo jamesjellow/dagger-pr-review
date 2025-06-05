@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Dagger-based GitHub PR reviewer script with OpenAI feedback integration.
+(Updated for openai>=1.0.0)
 """
 
 import os
@@ -9,11 +10,11 @@ import json
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import dagger
 from github import Github, GithubException
-import openai
+from openai import OpenAI, AsyncOpenAI, APIError  # Use the new client classes
 
 
 class PRReviewer:
@@ -25,8 +26,13 @@ class PRReviewer:
         self.repo_obj = self.gh.get_repo(repo)
         self.pr = self.repo_obj.get_pull(pr_number)
 
-        # Configure OpenAI API key
-        openai.api_key = os.environ.get("OPENAI_API_KEY", "")
+        # Instantiate a synchronous OpenAI client for feedback
+        self.openai_client = OpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY")  # Must be set in the environment
+        )
+
+        # If you ever need an async client, you can do:
+        # self.openai_async = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
     async def run_code_analysis(self, client: dagger.Client) -> Dict[str, str]:
         """Run comprehensive code analysis using Dagger."""
@@ -56,7 +62,7 @@ dependencies = [
             client.container()
             .from_("python:3.12-slim")
             .with_exec(["sh", "-c", "apt-get update && apt-get install -y git"])
-            .with_exec(["pip", "install", "uv", "openai", "dagger", "PyGithub"])
+            .with_exec(["pip", "install", "uv", "dagger", "PyGithub", "openai"])
             .with_directory("/src", src)
             .with_workdir("/src")
         )
@@ -188,40 +194,41 @@ dependencies = [
         # Concatenate the analysis results into one string
         analysis_blob = ""
         for tool, output in results.items():
-            truncated = output if len(output) < 2000 else output[:2000] + "\n... (truncated)\n"
+            truncated = (
+                output if len(output) < 2000
+                else output[:2000] + "\n... (truncated)\n"
+            )
             analysis_blob += f"### {tool.upper()} Results:\n{truncated}\n\n"
 
-        # Build Chat messages
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert Python code reviewer. "
-                    "Read the static-analysis results below and provide "
-                    "concise, actionable feedback and suggestions."
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"{analysis_blob}\n\n"
-                    "Please summarize the most important issues "
-                    "and suggest improvements. Keep each suggestion brief."
-                )
-            }
-        ]
-
+        # Build ChatCompletion request via the new client
         try:
-            response = openai.ChatCompletion.create(
+            response = self.openai_client.chat.completions.create(
                 model="gpt-4",
-                messages=messages,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert Python code reviewer. "
+                            "Read the static-analysis results below and provide "
+                            "concise, actionable feedback and suggestions."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{analysis_blob}\n\n"
+                            "Please summarize the most important issues "
+                            "and suggest improvements. Keep each suggestion brief."
+                        )
+                    }
+                ],
                 temperature=0.2,
-                max_tokens=512,
+                max_tokens=512
             )
-            ai_reply = response.choices[0].message["content"].strip()
-            return ai_reply
+            # Access response fields via attributes instead of dicts
+            return response.choices[0].message.content.strip()
 
-        except Exception as e:
+        except APIError as e:
             return f"❌ Could not generate AI feedback: {str(e)}"
 
     async def run_review(self) -> None:
