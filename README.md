@@ -8,7 +8,7 @@ it with Python:
 
 ```bash
 export GITHUB_REPOSITORY=jamesjellow/dagger-pr-review
-export GITHUB_PR_NUMBER=1
+export GITHUB_PR_NUMBER=SOME_INTEGER
 export GITHUB_TOKEN=ghp_yourtoken
 python3 review.py
 ```
